@@ -1,0 +1,62 @@
+[package]
+name = "ods-securemail"
+version = "0.1.0"
+edition = "2021"
+description = "ODS Platform — SecureMail Service"
+authors = ["ODS Platform <dev@orbusdigital.com>"]
+
+[dependencies]
+# ODS shared library
+ods-common = { git = "https://github.com/jniox/ods-common", branch = "staging", features = ["full"] }
+
+# Web framework
+actix-web = "4"
+actix-rt = "2"
+actix-cors = "0.7"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# JWT (config/test helpers alongside ods-common)
+jsonwebtoken = "9"
+
+# Kafka/Redpanda
+rdkafka = { version = "0.36", features = ["cmake-build"] }
+
+# Security: force rand >=0.9.3 (RUSTSEC-2026-0097)
+rand = ">=0.9.3"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-actix-web = "0.7"
+
+# Config
+dotenvy = "0.15"
+
+# Validation
+validator = { version = "0.19", features = ["derive"] }
+
+# Hex encoding/decoding
+hex = "0.4"
+
+[dev-dependencies]
+actix-rt = "2"
+reqwest = { version = "0.12", features = ["json"] }
