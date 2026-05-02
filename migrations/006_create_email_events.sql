@@ -9,17 +9,25 @@ CREATE TABLE IF NOT EXISTS email_events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_email_events_email_created
+CREATE INDEX IF NOT EXISTS idx_email_events_email_created
     ON email_events (email_id, created_at);
 
-CREATE INDEX idx_email_events_tenant_created
+CREATE INDEX IF NOT EXISTS idx_email_events_tenant_created
     ON email_events (tenant_id, created_at DESC);
 
 -- RLS
 ALTER TABLE email_events ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY tenant_isolation ON email_events
-    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+DO $$ BEGIN
+IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'email_events' AND policyname = 'tenant_isolation') THEN
+    CREATE POLICY tenant_isolation ON email_events
+        USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+END IF;
+END $$;
 
-CREATE POLICY tenant_isolation_insert ON email_events
-    FOR INSERT WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+DO $$ BEGIN
+IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'email_events' AND policyname = 'tenant_isolation_insert') THEN
+    CREATE POLICY tenant_isolation_insert ON email_events
+        FOR INSERT WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+END IF;
+END $$;

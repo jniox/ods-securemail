@@ -15,20 +15,28 @@ CREATE TABLE IF NOT EXISTS encryption_keys (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX encryption_keys_tenant_email_type_key
+CREATE UNIQUE INDEX IF NOT EXISTS encryption_keys_tenant_email_type_key
     ON encryption_keys (tenant_id, email, type) WHERE deleted_at IS NULL;
 
-CREATE INDEX idx_encryption_keys_tenant_fingerprint
+CREATE INDEX IF NOT EXISTS idx_encryption_keys_tenant_fingerprint
     ON encryption_keys (tenant_id, fingerprint);
 
-CREATE INDEX idx_encryption_keys_tenant_expires
+CREATE INDEX IF NOT EXISTS idx_encryption_keys_tenant_expires
     ON encryption_keys (tenant_id, expires_at) WHERE deleted_at IS NULL;
 
 -- RLS
 ALTER TABLE encryption_keys ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY tenant_isolation ON encryption_keys
-    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+DO $$ BEGIN
+IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'encryption_keys' AND policyname = 'tenant_isolation') THEN
+    CREATE POLICY tenant_isolation ON encryption_keys
+        USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+END IF;
+END $$;
 
-CREATE POLICY tenant_isolation_insert ON encryption_keys
-    FOR INSERT WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+DO $$ BEGIN
+IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'encryption_keys' AND policyname = 'tenant_isolation_insert') THEN
+    CREATE POLICY tenant_isolation_insert ON encryption_keys
+        FOR INSERT WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+END IF;
+END $$;

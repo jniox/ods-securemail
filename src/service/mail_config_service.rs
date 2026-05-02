@@ -1,6 +1,9 @@
 use std::sync::Arc;
 use uuid::Uuid;
 
+use aes_gcm::aead::{Aead, KeyInit, OsRng};
+use aes_gcm::{Aes256Gcm, AeadCore, Nonce};
+
 use crate::domain::mail_config::{
     CreateMailConfig, MailConfig, MailConfigResponse, PaginatedResponse, UpdateMailConfig,
 };
@@ -27,16 +30,40 @@ impl MailConfigService {
         }
     }
 
-    /// Encrypt a password using the master key (placeholder XOR for now, will be AES-256-GCM).
+    /// Encrypt a password using AES-256-GCM with the master key.
+    /// Output format: nonce (12 bytes) || ciphertext (variable length).
     fn encrypt_password(&self, password: &str) -> Vec<u8> {
-        // Simple XOR with master key for development; production will use AES-256-GCM
-        let key = &self.master_key;
-        password
-            .as_bytes()
-            .iter()
-            .enumerate()
-            .map(|(i, b)| b ^ key[i % key.len()])
-            .collect()
+        let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&self.master_key);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let ciphertext = cipher
+            .encrypt(&nonce, password.as_bytes())
+            .expect("AES-256-GCM encryption must not fail with valid key");
+        // Prepend nonce to ciphertext
+        let mut result = Vec::with_capacity(12 + ciphertext.len());
+        result.extend_from_slice(&nonce);
+        result.extend_from_slice(&ciphertext);
+        result
+    }
+
+    /// Decrypt a password encrypted with AES-256-GCM.
+    /// Input format: nonce (12 bytes) || ciphertext.
+    #[allow(dead_code)]
+    fn decrypt_password(&self, encrypted: &[u8]) -> AppResult<String> {
+        if encrypted.len() < 12 {
+            return Err(AppError::Internal(
+                "Invalid encrypted data: too short".to_string(),
+            ));
+        }
+        let (nonce_bytes, ciphertext) = encrypted.split_at(12);
+        let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&self.master_key);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Nonce::from_slice(nonce_bytes);
+        let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
+            AppError::Internal("Failed to decrypt password: invalid key or corrupted data".to_string())
+        })?;
+        String::from_utf8(plaintext)
+            .map_err(|_| AppError::Internal("Decrypted password is not valid UTF-8".to_string()))
     }
 
     pub async fn create(
@@ -253,10 +280,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_encrypt_password() {
+    async fn test_encrypt_decrypt_password() {
         let (svc, _) = make_service();
         let encrypted = svc.encrypt_password("hello");
-        assert_ne!(encrypted, b"hello");
-        assert_eq!(encrypted.len(), 5);
+        // AES-256-GCM: 12-byte nonce + plaintext len + 16-byte auth tag
+        assert_eq!(encrypted.len(), 12 + 5 + 16);
+        assert_ne!(&encrypted[12..], b"hello");
+
+        let decrypted = svc.decrypt_password(&encrypted).unwrap();
+        assert_eq!(decrypted, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_encrypt_produces_different_ciphertext_each_time() {
+        let (svc, _) = make_service();
+        let enc1 = svc.encrypt_password("same");
+        let enc2 = svc.encrypt_password("same");
+        // Random nonce means different ciphertext each time
+        assert_ne!(enc1, enc2);
+    }
+
+    #[tokio::test]
+    async fn test_decrypt_invalid_data() {
+        let (svc, _) = make_service();
+        // Too short
+        let result = svc.decrypt_password(&[0u8; 5]);
+        assert!(result.is_err());
+        // Corrupted ciphertext
+        let mut encrypted = svc.encrypt_password("test");
+        encrypted[15] ^= 0xFF; // flip a byte in the ciphertext
+        let result = svc.decrypt_password(&encrypted);
+        assert!(result.is_err());
     }
 }

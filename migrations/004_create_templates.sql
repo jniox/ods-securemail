@@ -17,17 +17,25 @@ CREATE TABLE IF NOT EXISTS templates (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX templates_tenant_name_key
+CREATE UNIQUE INDEX IF NOT EXISTS templates_tenant_name_key
     ON templates (tenant_id, name) WHERE deleted_at IS NULL;
 
-CREATE INDEX idx_templates_tenant
+CREATE INDEX IF NOT EXISTS idx_templates_tenant
     ON templates (tenant_id) WHERE deleted_at IS NULL;
 
 -- RLS
 ALTER TABLE templates ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY tenant_isolation ON templates
-    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+DO $$ BEGIN
+IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'templates' AND policyname = 'tenant_isolation') THEN
+    CREATE POLICY tenant_isolation ON templates
+        USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+END IF;
+END $$;
 
-CREATE POLICY tenant_isolation_insert ON templates
-    FOR INSERT WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+DO $$ BEGIN
+IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'templates' AND policyname = 'tenant_isolation_insert') THEN
+    CREATE POLICY tenant_isolation_insert ON templates
+        FOR INSERT WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+END IF;
+END $$;

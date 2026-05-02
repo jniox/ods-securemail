@@ -30,26 +30,34 @@ CREATE TABLE IF NOT EXISTS emails (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_emails_tenant_status_created
+CREATE INDEX IF NOT EXISTS idx_emails_tenant_status_created
     ON emails (tenant_id, status, created_at DESC);
 
-CREATE INDEX idx_emails_tenant_created
+CREATE INDEX IF NOT EXISTS idx_emails_tenant_created
     ON emails (tenant_id, created_at DESC);
 
-CREATE UNIQUE INDEX emails_tenant_idempotency_key
+CREATE UNIQUE INDEX IF NOT EXISTS emails_tenant_idempotency_key
     ON emails (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
 
-CREATE INDEX idx_emails_batch
+CREATE INDEX IF NOT EXISTS idx_emails_batch
     ON emails (batch_id) WHERE batch_id IS NOT NULL;
 
-CREATE INDEX idx_emails_scheduled
+CREATE INDEX IF NOT EXISTS idx_emails_scheduled
     ON emails (scheduled_at) WHERE status = 'queued' AND scheduled_at IS NOT NULL;
 
 -- RLS
 ALTER TABLE emails ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY tenant_isolation ON emails
-    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+DO $$ BEGIN
+IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'emails' AND policyname = 'tenant_isolation') THEN
+    CREATE POLICY tenant_isolation ON emails
+        USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+END IF;
+END $$;
 
-CREATE POLICY tenant_isolation_insert ON emails
-    FOR INSERT WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+DO $$ BEGIN
+IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'emails' AND policyname = 'tenant_isolation_insert') THEN
+    CREATE POLICY tenant_isolation_insert ON emails
+        FOR INSERT WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+END IF;
+END $$;

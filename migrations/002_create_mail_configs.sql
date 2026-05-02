@@ -24,18 +24,26 @@ CREATE TABLE IF NOT EXISTS mail_configs (
 );
 
 -- Unique constraint: one name per tenant (excluding soft-deleted)
-CREATE UNIQUE INDEX mail_configs_tenant_id_name_key
+CREATE UNIQUE INDEX IF NOT EXISTS mail_configs_tenant_id_name_key
     ON mail_configs (tenant_id, name) WHERE deleted_at IS NULL;
 
 -- Index for finding default config per tenant
-CREATE INDEX idx_mail_configs_tenant_default
+CREATE INDEX IF NOT EXISTS idx_mail_configs_tenant_default
     ON mail_configs (tenant_id, is_default) WHERE deleted_at IS NULL;
 
 -- RLS
 ALTER TABLE mail_configs ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY tenant_isolation ON mail_configs
-    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+DO $$ BEGIN
+IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'mail_configs' AND policyname = 'tenant_isolation') THEN
+    CREATE POLICY tenant_isolation ON mail_configs
+        USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+END IF;
+END $$;
 
-CREATE POLICY tenant_isolation_insert ON mail_configs
-    FOR INSERT WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+DO $$ BEGIN
+IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'mail_configs' AND policyname = 'tenant_isolation_insert') THEN
+    CREATE POLICY tenant_isolation_insert ON mail_configs
+        FOR INSERT WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+END IF;
+END $$;

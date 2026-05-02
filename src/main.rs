@@ -78,6 +78,7 @@ async fn main() -> std::io::Result<()> {
 
     let pool_data = web::Data::new(pool.clone());
     let jwt_config_data = web::Data::new(jwt_config);
+    let max_body_size = config.max_body_size;
     let bind_addr = config.bind_address();
 
     tracing::info!(addr = %bind_addr, "Starting HTTP server");
@@ -88,6 +89,8 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(TracingLogger::default())
             .wrap(cors)
+            .app_data(web::JsonConfig::default().limit(max_body_size))
+            .app_data(web::PayloadConfig::default().limit(max_body_size))
             .app_data(pool_data.clone())
             .app_data(jwt_config_data.clone())
             .app_data(mail_config_svc.clone())
