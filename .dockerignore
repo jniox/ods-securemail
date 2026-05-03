@@ -1,0 +1,9 @@
+target/
+.env
+.env.*
+*.log
+.git/
+.gitignore
+tasks/
+CLAUDE.md
+tests/
