@@ -49,6 +49,19 @@ impl AppConfig {
         let master_encryption_key = env::var("MASTER_ENCRYPTION_KEY")
             .map_err(|_| "MASTER_ENCRYPTION_KEY environment variable is required".to_string())?;
 
+        // Reject empty or all-zero keys (zero entropy, insecure)
+        let trimmed_key = master_encryption_key.trim();
+        if trimmed_key.is_empty() {
+            return Err(
+                "MASTER_ENCRYPTION_KEY must not be empty — generate a real key with: openssl rand -hex 32".to_string(),
+            );
+        }
+        if trimmed_key.chars().all(|c| c == '0') {
+            return Err(
+                "MASTER_ENCRYPTION_KEY must not be all zeros — generate a real key with: openssl rand -hex 32".to_string(),
+            );
+        }
+
         Ok(Self {
             host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             port,
@@ -117,12 +130,27 @@ mod tests {
         with_env_vars(
             &[
                 ("DATABASE_URL", "postgres://test:test@localhost/test"),
-                ("MASTER_ENCRYPTION_KEY", "0000000000000000000000000000000000000000000000000000000000000000"),
+                ("MASTER_ENCRYPTION_KEY", "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"),
             ],
             || {
                 let config = AppConfig::from_env().unwrap();
                 assert_eq!(config.database_url, "postgres://test:test@localhost/test");
                 assert_eq!(config.port, 8086);
+            },
+        );
+    }
+
+    #[test]
+    fn test_config_rejects_all_zero_master_key() {
+        with_env_vars(
+            &[
+                ("DATABASE_URL", "postgres://test:test@localhost/test"),
+                ("MASTER_ENCRYPTION_KEY", "0000000000000000000000000000000000000000000000000000000000000000"),
+            ],
+            || {
+                let result = AppConfig::from_env();
+                assert!(result.is_err());
+                assert!(result.unwrap_err().contains("must not be all zeros"));
             },
         );
     }
@@ -152,7 +180,7 @@ mod tests {
         with_env_vars(
             &[
                 ("DATABASE_URL", "postgres://test:test@localhost/test"),
-                ("MASTER_ENCRYPTION_KEY", "0000000000000000000000000000000000000000000000000000000000000000"),
+                ("MASTER_ENCRYPTION_KEY", "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"),
                 ("HOST", "127.0.0.1"),
                 ("PORT", "9090"),
             ],
