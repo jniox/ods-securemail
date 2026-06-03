@@ -63,10 +63,8 @@ async fn main() -> std::io::Result<()> {
         };
 
     // Parse master encryption key (hex string to bytes)
-    let master_key = hex::decode(&config.master_encryption_key).unwrap_or_else(|_| {
-        tracing::warn!("MASTER_ENCRYPTION_KEY is not valid hex, using raw bytes");
-        config.master_encryption_key.as_bytes().to_vec()
-    });
+    let master_key = hex::decode(&config.master_encryption_key)
+        .expect("MASTER_ENCRYPTION_KEY must be valid hex (validated at startup)");
 
     // Create repository and service
     let mail_config_repo = Arc::new(MailConfigRepository::new(pool.clone()));

@@ -1736,7 +1736,7 @@ dependencies = [
 [[package]]
 name = "ods-common"
 version = "0.1.0"
-source = "git+https://github.com/jniox/ods-common?branch=staging#3e581e05e296e48843d49865a3dd8615be077f88"
+source = "git+https://github.com/jniox/ods-common?branch=staging#4c538a07853e974939cd45db345ede0344b9b137"
 dependencies = [
  "actix-web",
  "base64",

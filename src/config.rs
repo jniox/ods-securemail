@@ -49,6 +49,32 @@ impl AppConfig {
         let master_encryption_key = env::var("MASTER_ENCRYPTION_KEY")
             .map_err(|_| "MASTER_ENCRYPTION_KEY environment variable is required".to_string())?;
 
+        // Reject empty or all-zero keys (zero entropy, insecure)
+        let trimmed_key = master_encryption_key.trim();
+        if trimmed_key.is_empty() {
+            return Err(
+                "MASTER_ENCRYPTION_KEY must not be empty — generate a real key with: openssl rand -hex 32".to_string(),
+            );
+        }
+        if trimmed_key.chars().all(|c| c == '0') {
+            return Err(
+                "MASTER_ENCRYPTION_KEY must not be all zeros — generate a real key with: openssl rand -hex 32".to_string(),
+            );
+        }
+
+        // Validate key is exactly 64 hex characters (32 bytes for AES-256)
+        if trimmed_key.len() != 64 {
+            return Err(format!(
+                "MASTER_ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes), got {} characters — generate with: openssl rand -hex 32",
+                trimmed_key.len()
+            ));
+        }
+        if !trimmed_key.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(
+                "MASTER_ENCRYPTION_KEY must contain only hexadecimal characters (0-9, a-f, A-F) — generate with: openssl rand -hex 32".to_string(),
+            );
+        }
+
         Ok(Self {
             host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             port,
@@ -117,12 +143,27 @@ mod tests {
         with_env_vars(
             &[
                 ("DATABASE_URL", "postgres://test:test@localhost/test"),
-                ("MASTER_ENCRYPTION_KEY", "0000000000000000000000000000000000000000000000000000000000000000"),
+                ("MASTER_ENCRYPTION_KEY", "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"),
             ],
             || {
                 let config = AppConfig::from_env().unwrap();
                 assert_eq!(config.database_url, "postgres://test:test@localhost/test");
                 assert_eq!(config.port, 8086);
+            },
+        );
+    }
+
+    #[test]
+    fn test_config_rejects_all_zero_master_key() {
+        with_env_vars(
+            &[
+                ("DATABASE_URL", "postgres://test:test@localhost/test"),
+                ("MASTER_ENCRYPTION_KEY", "0000000000000000000000000000000000000000000000000000000000000000"),
+            ],
+            || {
+                let result = AppConfig::from_env();
+                assert!(result.is_err());
+                assert!(result.unwrap_err().contains("must not be all zeros"));
             },
         );
     }
@@ -148,11 +189,78 @@ mod tests {
     }
 
     #[test]
+    fn test_config_rejects_short_master_key() {
+        with_env_vars(
+            &[
+                ("DATABASE_URL", "postgres://test:test@localhost/test"),
+                ("MASTER_ENCRYPTION_KEY", "abcdef1234567890"),
+            ],
+            || {
+                let result = AppConfig::from_env();
+                assert!(result.is_err());
+                let err = result.unwrap_err();
+                assert!(err.contains("exactly 64 hex characters"), "error was: {err}");
+                assert!(err.contains("got 16"), "error was: {err}");
+            },
+        );
+    }
+
+    #[test]
+    fn test_config_rejects_long_master_key() {
+        with_env_vars(
+            &[
+                ("DATABASE_URL", "postgres://test:test@localhost/test"),
+                ("MASTER_ENCRYPTION_KEY", "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890aa"),
+            ],
+            || {
+                let result = AppConfig::from_env();
+                assert!(result.is_err());
+                let err = result.unwrap_err();
+                assert!(err.contains("exactly 64 hex characters"), "error was: {err}");
+                assert!(err.contains("got 66"), "error was: {err}");
+            },
+        );
+    }
+
+    #[test]
+    fn test_config_rejects_non_hex_master_key() {
+        with_env_vars(
+            &[
+                ("DATABASE_URL", "postgres://test:test@localhost/test"),
+                ("MASTER_ENCRYPTION_KEY", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"),
+            ],
+            || {
+                let result = AppConfig::from_env();
+                assert!(result.is_err());
+                let err = result.unwrap_err();
+                assert!(err.contains("only hexadecimal characters"), "error was: {err}");
+            },
+        );
+    }
+
+    #[test]
+    fn test_config_accepts_valid_master_key() {
+        with_env_vars(
+            &[
+                ("DATABASE_URL", "postgres://test:test@localhost/test"),
+                ("MASTER_ENCRYPTION_KEY", "aAbBcCdDeEfF1234567890abcdef1234567890ABCDEF1234567890abcdef1234"),
+            ],
+            || {
+                let config = AppConfig::from_env().unwrap();
+                assert_eq!(
+                    config.master_encryption_key,
+                    "aAbBcCdDeEfF1234567890abcdef1234567890ABCDEF1234567890abcdef1234"
+                );
+            },
+        );
+    }
+
+    #[test]
     fn test_bind_address() {
         with_env_vars(
             &[
                 ("DATABASE_URL", "postgres://test:test@localhost/test"),
-                ("MASTER_ENCRYPTION_KEY", "0000000000000000000000000000000000000000000000000000000000000000"),
+                ("MASTER_ENCRYPTION_KEY", "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"),
                 ("HOST", "127.0.0.1"),
                 ("PORT", "9090"),
             ],
