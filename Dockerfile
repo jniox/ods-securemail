@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # -- Stage 1: Build --
 FROM rust:1.96-slim-bookworm AS builder
 
@@ -9,20 +10,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4-openssl-dev \
     libsasl2-dev \
     curl \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
-# Cache dependencies
+# Cache dependencies — uses GitHub token secret to fetch ods-common private dep
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src && echo 'fn main() {}' > src/main.rs && \
+RUN --mount=type=secret,id=github_token \
+    git config --global url."https://$(cat /run/secrets/github_token)@github.com/".insteadOf "https://github.com/" && \
+    mkdir -p src && echo 'fn main() {}' > src/main.rs && \
     cargo build --release --bin ods-securemail 2>&1 | tail -5; \
+    git config --global --unset url."https://$(cat /run/secrets/github_token)@github.com/".insteadOf || true; \
     rm -rf src
 
 # Build the real application
 COPY migrations ./migrations
 COPY src ./src
-RUN touch src/main.rs && cargo build --release --bin ods-securemail
+RUN --mount=type=secret,id=github_token \
+    git config --global url."https://$(cat /run/secrets/github_token)@github.com/".insteadOf "https://github.com/" && \
+    touch src/main.rs && cargo build --release --bin ods-securemail && \
+    git config --global --unset url."https://$(cat /run/secrets/github_token)@github.com/".insteadOf || true
 
 # -- Stage 2: Runtime --
 FROM debian:bookworm-slim AS runtime
