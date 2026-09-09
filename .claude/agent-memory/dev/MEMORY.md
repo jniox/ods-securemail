@@ -22,5 +22,6 @@
 
 ## Indexed memories
 - [ods-common staging pin](project_ods_common_staging_pin.md) — upstream fixes merged to ods-common's `dev` do NOT reach this repo until promoted to `staging`
+- [ods-common promotion delta](project_ods_common_promotion_delta.md) — a `dev`→`staging` promotion ships the whole delta; `full` grows, measure the consumer graph first
 - [Shared DB migration tracking](project_shared_db_migration_tracking.md) — `VersionMissing(N)` on the shared dev Postgres is database state, not a regression; verify on a fresh DB
 - [Cargo feature activators](project_cargo_feature_activators.md) — for feature-gated advisories, enumerate who ACTIVATES the feature, and re-read the advisory's patched range
