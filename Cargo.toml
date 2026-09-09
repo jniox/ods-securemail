@@ -10,7 +10,16 @@ authors = ["ODS Platform <dev@orbusdigital.com>"]
 ods-common = { git = "https://github.com/jniox/ods-common", branch = "staging", features = ["full"] }
 
 # Web framework
-actix-web = "4"
+actix-web = { version = "4", default-features = false, features = [
+    "macros",
+    "compress-brotli",
+    "compress-gzip",
+    "compress-zstd",
+    "cookies",
+    "unicode",
+    "compat",
+    "ws",
+] }
 actix-rt = "2"
 actix-cors = "0.7"
 
