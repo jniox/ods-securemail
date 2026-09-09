@@ -6,7 +6,6 @@
 use actix_web::{test, web, App};
 use serde_json::json;
 use std::sync::Arc;
-use tracing_subscriber;
 use uuid::Uuid;
 
 use ods_common::auth::JwtConfig;
