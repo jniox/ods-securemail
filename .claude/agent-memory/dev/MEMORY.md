@@ -19,3 +19,8 @@
 - COUNT queries must NOT have ORDER BY clause (PostgreSQL error 42803)
 - Dynamic query builders: separate ORDER BY logic from WHERE clause building
 - `build_list_query` param_idx must account for pre-bound params (e.g., tenant_id = $1, so dynamic starts at $2)
+
+## Indexed memories
+- [ods-common staging pin](project_ods_common_staging_pin.md) — upstream fixes merged to ods-common's `dev` do NOT reach this repo until promoted to `staging`
+- [Shared DB migration tracking](project_shared_db_migration_tracking.md) — `VersionMissing(N)` on the shared dev Postgres is database state, not a regression; verify on a fresh DB
+- [Cargo feature activators](project_cargo_feature_activators.md) — for feature-gated advisories, enumerate who ACTIVATES the feature, and re-read the advisory's patched range
