@@ -143,7 +143,10 @@ mod tests {
         with_env_vars(
             &[
                 ("DATABASE_URL", "postgres://test:test@localhost/test"),
-                ("MASTER_ENCRYPTION_KEY", "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"),
+                (
+                    "MASTER_ENCRYPTION_KEY",
+                    "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                ),
             ],
             || {
                 let config = AppConfig::from_env().unwrap();
@@ -158,7 +161,10 @@ mod tests {
         with_env_vars(
             &[
                 ("DATABASE_URL", "postgres://test:test@localhost/test"),
-                ("MASTER_ENCRYPTION_KEY", "0000000000000000000000000000000000000000000000000000000000000000"),
+                (
+                    "MASTER_ENCRYPTION_KEY",
+                    "0000000000000000000000000000000000000000000000000000000000000000",
+                ),
             ],
             || {
                 let result = AppConfig::from_env();
@@ -199,7 +205,10 @@ mod tests {
                 let result = AppConfig::from_env();
                 assert!(result.is_err());
                 let err = result.unwrap_err();
-                assert!(err.contains("exactly 64 hex characters"), "error was: {err}");
+                assert!(
+                    err.contains("exactly 64 hex characters"),
+                    "error was: {err}"
+                );
                 assert!(err.contains("got 16"), "error was: {err}");
             },
         );
@@ -210,13 +219,19 @@ mod tests {
         with_env_vars(
             &[
                 ("DATABASE_URL", "postgres://test:test@localhost/test"),
-                ("MASTER_ENCRYPTION_KEY", "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890aa"),
+                (
+                    "MASTER_ENCRYPTION_KEY",
+                    "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890aa",
+                ),
             ],
             || {
                 let result = AppConfig::from_env();
                 assert!(result.is_err());
                 let err = result.unwrap_err();
-                assert!(err.contains("exactly 64 hex characters"), "error was: {err}");
+                assert!(
+                    err.contains("exactly 64 hex characters"),
+                    "error was: {err}"
+                );
                 assert!(err.contains("got 66"), "error was: {err}");
             },
         );
@@ -227,13 +242,19 @@ mod tests {
         with_env_vars(
             &[
                 ("DATABASE_URL", "postgres://test:test@localhost/test"),
-                ("MASTER_ENCRYPTION_KEY", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"),
+                (
+                    "MASTER_ENCRYPTION_KEY",
+                    "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+                ),
             ],
             || {
                 let result = AppConfig::from_env();
                 assert!(result.is_err());
                 let err = result.unwrap_err();
-                assert!(err.contains("only hexadecimal characters"), "error was: {err}");
+                assert!(
+                    err.contains("only hexadecimal characters"),
+                    "error was: {err}"
+                );
             },
         );
     }
@@ -243,7 +264,10 @@ mod tests {
         with_env_vars(
             &[
                 ("DATABASE_URL", "postgres://test:test@localhost/test"),
-                ("MASTER_ENCRYPTION_KEY", "aAbBcCdDeEfF1234567890abcdef1234567890ABCDEF1234567890abcdef1234"),
+                (
+                    "MASTER_ENCRYPTION_KEY",
+                    "aAbBcCdDeEfF1234567890abcdef1234567890ABCDEF1234567890abcdef1234",
+                ),
             ],
             || {
                 let config = AppConfig::from_env().unwrap();
@@ -260,7 +284,10 @@ mod tests {
         with_env_vars(
             &[
                 ("DATABASE_URL", "postgres://test:test@localhost/test"),
-                ("MASTER_ENCRYPTION_KEY", "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"),
+                (
+                    "MASTER_ENCRYPTION_KEY",
+                    "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                ),
                 ("HOST", "127.0.0.1"),
                 ("PORT", "9090"),
             ],

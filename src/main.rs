@@ -50,17 +50,19 @@ async fn main() -> std::io::Result<()> {
     tracing::info!("Database pool created and migrations applied");
 
     // Create event producer
-    let event_producer: Arc<dyn ods_common::events::EventProducer> =
-        if config.kafka_brokers != "localhost:9092" || std::env::var("FORCE_KAFKA").is_ok() {
-            tracing::info!(brokers = %config.kafka_brokers, topic = %config.kafka_topic, "Connecting to Redpanda");
-            Arc::new(
-                RedpandaProducer::new(&config.kafka_brokers, &config.kafka_topic)
-                    .expect("Failed to create Redpanda producer"),
-            )
-        } else {
-            tracing::warn!("Using in-memory event producer (dev mode)");
-            Arc::new(InMemoryProducer::new())
-        };
+    let event_producer: Arc<dyn ods_common::events::EventProducer> = if config.kafka_brokers
+        != "localhost:9092"
+        || std::env::var("FORCE_KAFKA").is_ok()
+    {
+        tracing::info!(brokers = %config.kafka_brokers, topic = %config.kafka_topic, "Connecting to Redpanda");
+        Arc::new(
+            RedpandaProducer::new(&config.kafka_brokers, &config.kafka_topic)
+                .expect("Failed to create Redpanda producer"),
+        )
+    } else {
+        tracing::warn!("Using in-memory event producer (dev mode)");
+        Arc::new(InMemoryProducer::new())
+    };
 
     // Parse master encryption key (hex string to bytes)
     let master_key = hex::decode(&config.master_encryption_key)

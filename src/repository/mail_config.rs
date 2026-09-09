@@ -178,9 +178,18 @@ impl MailConfigRepository {
         let name = cmd.name.as_deref().unwrap_or(&existing.name);
         let smtp_host = cmd.smtp_host.as_deref().unwrap_or(&existing.smtp_host);
         let smtp_port = cmd.smtp_port.unwrap_or(existing.smtp_port);
-        let smtp_username = cmd.smtp_username.as_deref().unwrap_or(&existing.smtp_username);
-        let smtp_encryption = cmd.smtp_encryption.as_deref().unwrap_or(&existing.smtp_encryption);
-        let from_address = cmd.from_address.as_deref().unwrap_or(&existing.from_address);
+        let smtp_username = cmd
+            .smtp_username
+            .as_deref()
+            .unwrap_or(&existing.smtp_username);
+        let smtp_encryption = cmd
+            .smtp_encryption
+            .as_deref()
+            .unwrap_or(&existing.smtp_encryption);
+        let from_address = cmd
+            .from_address
+            .as_deref()
+            .unwrap_or(&existing.from_address);
         let from_name = cmd.from_name.as_deref().unwrap_or(&existing.from_name);
         let is_default = cmd.is_default.unwrap_or(existing.is_default);
 
@@ -270,7 +279,12 @@ impl MailConfigRepository {
         Ok(())
     }
 
-    pub async fn set_verified(&self, tenant_id: Uuid, id: Uuid, verified: bool) -> AppResult<MailConfig> {
+    pub async fn set_verified(
+        &self,
+        tenant_id: Uuid,
+        id: Uuid,
+        verified: bool,
+    ) -> AppResult<MailConfig> {
         let mut tx = begin_tenant_tx(&self.pool, tenant_id).await?;
 
         let config = sqlx::query_as::<_, MailConfig>(

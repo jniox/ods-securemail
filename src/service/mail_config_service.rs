@@ -2,7 +2,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
-use aes_gcm::{Aes256Gcm, AeadCore, Nonce};
+use aes_gcm::{AeadCore, Aes256Gcm, Nonce};
 
 use crate::domain::mail_config::{
     CreateMailConfig, MailConfig, MailConfigResponse, PaginatedResponse, UpdateMailConfig,
@@ -60,7 +60,9 @@ impl MailConfigService {
         let cipher = Aes256Gcm::new(key);
         let nonce = Nonce::from_slice(nonce_bytes);
         let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
-            AppError::Internal("Failed to decrypt password: invalid key or corrupted data".to_string())
+            AppError::Internal(
+                "Failed to decrypt password: invalid key or corrupted data".to_string(),
+            )
         })?;
         String::from_utf8(plaintext)
             .map_err(|_| AppError::Internal("Decrypted password is not valid UTF-8".to_string()))
@@ -82,10 +84,7 @@ impl MailConfigService {
 
         // Encrypt passwords
         let smtp_password_encrypted = self.encrypt_password(&cmd.smtp_password);
-        let imap_password_encrypted = cmd
-            .imap_password
-            .as_ref()
-            .map(|p| self.encrypt_password(p));
+        let imap_password_encrypted = cmd.imap_password.as_ref().map(|p| self.encrypt_password(p));
 
         let config = self
             .repo
@@ -114,11 +113,7 @@ impl MailConfigService {
         Ok(MailConfigResponse::from(config))
     }
 
-    pub async fn get_by_id(
-        &self,
-        tenant_id: Uuid,
-        id: Uuid,
-    ) -> AppResult<MailConfigResponse> {
+    pub async fn get_by_id(&self, tenant_id: Uuid, id: Uuid) -> AppResult<MailConfigResponse> {
         let config = self.repo.get_by_id(tenant_id, id).await?;
         Ok(MailConfigResponse::from(config))
     }
@@ -180,11 +175,7 @@ impl MailConfigService {
         self.repo.soft_delete(tenant_id, id).await
     }
 
-    pub async fn verify(
-        &self,
-        tenant_id: Uuid,
-        id: Uuid,
-    ) -> AppResult<MailConfig> {
+    pub async fn verify(&self, tenant_id: Uuid, id: Uuid) -> AppResult<MailConfig> {
         // In a real implementation, we would attempt SMTP connection here.
         // For now, we just mark it as verified.
         let config = self.repo.set_verified(tenant_id, id, true).await?;

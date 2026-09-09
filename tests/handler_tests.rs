@@ -10,10 +10,10 @@ use uuid::Uuid;
 
 use ods_common::auth::JwtConfig;
 use ods_securemail::api::{health, mail_configs};
-use sqlx::Executor;
 use ods_securemail::events::producer::InMemoryProducer;
 use ods_securemail::repository::{db, mail_config::MailConfigRepository};
 use ods_securemail::service::mail_config_service::MailConfigService;
+use sqlx::Executor;
 
 const TEST_SECRET: &[u8] = b"ods-common-test-secret-32-chars!";
 
@@ -76,11 +76,9 @@ async fn setup_app_with_db() -> (
 
     // Clear stale migration tracking so idempotent migrations can re-run cleanly.
     // We delete by version (1-6) which are the securemail-specific migrations.
-    pool.execute(
-        "DELETE FROM _sqlx_migrations WHERE version IN (1, 2, 3, 4, 5, 6)"
-    )
-    .await
-    .ok();
+    pool.execute("DELETE FROM _sqlx_migrations WHERE version IN (1, 2, 3, 4, 5, 6)")
+        .await
+        .ok();
 
     // Run migrations (all use IF NOT EXISTS so they're idempotent)
     db::run_migrations(&pool)
@@ -289,8 +287,7 @@ async fn test_health_endpoint_no_auth_required() {
 #[actix_rt::test]
 async fn test_db_connectivity() {
     let _ = dotenvy::dotenv();
-    let database_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 
     let pool = db::create_pool(&database_url, "securemail", 5)
         .await
@@ -321,11 +318,9 @@ async fn test_db_connectivity() {
 
     // Try to insert directly
     let tenant_id = Uuid::new_v4();
-    let result = sqlx::query(
-        "SELECT set_config('app.tenant_id', $1, true)"
-    )
-    .bind(tenant_id.to_string())
-    .execute(&pool)
-    .await;
+    let result = sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+        .bind(tenant_id.to_string())
+        .execute(&pool)
+        .await;
     eprintln!("set_config result: {:?}", result);
 }
