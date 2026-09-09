@@ -6,8 +6,21 @@ description = "ODS Platform — SecureMail Service"
 authors = ["ODS Platform <dev@orbusdigital.com>"]
 
 [dependencies]
-# ODS shared library
-ods-common = { git = "https://github.com/jniox/ods-common", branch = "staging", features = ["full"] }
+# ODS shared library.
+# Les fonctionnalites sont nommees une a une, et non prises via `full` : `full`
+# inclut desormais `metrics` (endpoint Prometheus), que ce service n'expose pas et
+# qui ferait entrer protobuf 2.28.0 / RUSTSEC-2024-0437 dans le graphe livre.
+# Cette liste est exactement `full` prive de `metrics`. Garde : tests/framework.rs.
+ods-common = { git = "https://github.com/jniox/ods-common", branch = "staging", default-features = false, features = [
+    "auth",
+    "events",
+    "events-pubsub",
+    "db",
+    "error",
+    "health",
+    "middleware",
+    "testing",
+] }
 
 # Web framework
 actix-web = { version = "4", default-features = false, features = [
