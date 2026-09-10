@@ -1,11 +1,13 @@
 # Dev Agent Memory
 
 ## ODS Shared DB Migrations
-- All ODS services share a single PostgreSQL instance (ods-postgres, port 5433)
+- All ODS services share a single PostgreSQL instance (ods-postgres, port **5435** — verified 2026-09-10; 5433 is a different server)
 - Migrations MUST use `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`
 - RLS policies need `DO $$ BEGIN IF NOT EXISTS ... END $$` wrapper
 - The `ods` user is superuser and bypasses RLS, so list queries must include explicit `tenant_id` filter (defense-in-depth)
-- sqlx migration runner uses `_sqlx_migrations` table for tracking; if content changes, checksums mismatch
+- sqlx migration runner uses `_sqlx_migrations` for tracking; if content changes, checksums mismatch
+- Each service's registry must live in ITS schema: an absent schema is silently dropped from `search_path`,
+  so any UNQUALIFIED statement lands in `public` and hits the neighbours — always write `<schema>._sqlx_migrations`
 
 ## Rust/Actix-web Service Pattern (doceditor, form-engine)
 - Domain models in `src/domain/`
@@ -23,5 +25,5 @@
 ## Indexed memories
 - [ods-common staging pin](project_ods_common_staging_pin.md) — upstream fixes merged to ods-common's `dev` do NOT reach this repo until promoted to `staging`
 - [ods-common promotion delta](project_ods_common_promotion_delta.md) — a `dev`→`staging` promotion ships the whole delta; `full` grows, measure the consumer graph first
-- [Shared DB migration tracking](project_shared_db_migration_tracking.md) — `VersionMissing(N)` on the shared dev Postgres is database state, not a regression; verify on a fresh DB
+- [Shared DB migration tracking](project_shared_db_migration_tracking.md) — registry now isolated in the `securemail` schema; check WHERE the registry is before blaming code; no throwaway DB needed
 - [Cargo feature activators](project_cargo_feature_activators.md) — for feature-gated advisories, enumerate who ACTIVATES the feature, and re-read the advisory's patched range

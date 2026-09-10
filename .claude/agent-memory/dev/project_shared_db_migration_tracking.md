@@ -1,27 +1,35 @@
 ---
 name: shared-db-migration-tracking
-description: securemail integration tests fail VersionMissing(N) against the shared dev Postgres because _sqlx_migrations carries other services' rows — verify on a fresh database instead
+description: securemail's sqlx registry now lives in the securemail schema, not public — the shared-registry collapse of 2026-09-09 is fixed at both ends and needs no throwaway-database workaround
 metadata:
   type: project
 ---
 
-`cargo test --test handler_tests` against the shared ODS dev Postgres can fail every
-test with `Failed to run securemail migrations: VersionMissing(7)`. The shared
-`_sqlx_migrations` table held a `version 7 — repeatable constraint validation` row that
-does not exist in this repo's `migrations/` (only 001–006). sqlx refuses to migrate when
-the database records a version the migration set does not contain.
+securemail's `_sqlx_migrations` registry lives in the **`securemail` schema**. It is the
+service's own; cleaning it is correct and the harness does so before each run. Integration
+tests run against the shared dev Postgres directly — the six pass in ~1.6 s. **No throwaway
+database is needed**, and creating one would now be the wrong reflex.
 
-The harness in `tests/handler_tests.rs` deletes versions 1–6 before migrating, so any
-stray higher version survives and breaks the run.
+**Why:** on 2026-09-09 the registry was landing in `public` and was therefore shared with
+docstore. `ods_common::db::create_pool` sets `search_path TO securemail, public`, but
+PostgreSQL *silently drops* a schema that does not exist from a search_path — the effective
+path collapsed to `{public}` and every unqualified object fell through to it. The harness's
+`DELETE FROM _sqlx_migrations` then wiped docstore's versions 1–6, and securemail died on
+`VersionMissing(7)` for 16 h, counted as a code regression. It was neither a code regression
+nor "shared by design": it was a bootstrap defect, since the schema meant to isolate the
+registry is created by migration 001 — i.e. *after* sqlx has already chosen where to put it.
 
-**Why:** observed 2026-09-09. It looks like a code regression and is not one — it is
-database state. Diagnosing it as a test failure wastes a cycle.
+Closed at both ends under HR-20260910-006: the schema is pre-created on the shared instance
+(closing the wound), and the harness's two DELETEs are qualified to
+`securemail._sqlx_migrations` (removing the weapon — commit `4d4669a`). Verified after the
+suite: `to_regclass('public._sqlx_migrations')` is NULL.
 
-**How to apply:** do not clean the shared table — it belongs to the other services too,
-and the ODS dev Postgres is shared by design. Instead create a throwaway database
-(`CREATE DATABASE`, additive and permitted) and point `DATABASE_URL` at it; the six
-integration tests pass there in ~16 s. Note the exec-guard refuses `DROP DATABASE`
-(rule R5), so scratch databases must be cleaned up by a human — prefer a single
-reused name over one per run.
+**How to apply:** a `VersionMissing(N)` here is worth ten seconds of checking *where the
+registry actually is* before touching any code —
+`select table_schema from information_schema.tables where table_name='_sqlx_migrations'`.
+Never reintroduce an unqualified destructive statement in a test harness on this instance:
+qualification travels with the repo, database state does not. If a scratch database is ever
+genuinely needed, BR-0011 governs it — name `tmp_<service>_<YYYYMMDD>_<reason>`, and whoever
+creates it deletes it before writing their final status.
 
 Related: [[ods-common-staging-pin]]
