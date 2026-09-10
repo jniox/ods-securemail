@@ -76,7 +76,7 @@ async fn setup_app_with_db() -> (
 
     // Clear stale migration tracking so idempotent migrations can re-run cleanly.
     // We delete by version (1-6) which are the securemail-specific migrations.
-    pool.execute("DELETE FROM _sqlx_migrations WHERE version IN (1, 2, 3, 4, 5, 6)")
+    pool.execute("DELETE FROM securemail._sqlx_migrations WHERE version IN (1, 2, 3, 4, 5, 6)")
         .await
         .ok();
 
@@ -295,7 +295,7 @@ async fn test_db_connectivity() {
 
     // Clear stale migration tracking so idempotent migrations can re-run cleanly
     pool.execute(
-        "DELETE FROM _sqlx_migrations WHERE description LIKE '%securemail%' OR description LIKE '%create_schema%' OR description LIKE '%create_mail%' OR description LIKE '%create_encryption%' OR description LIKE '%create_template%' OR description LIKE '%create_email%'"
+        "DELETE FROM securemail._sqlx_migrations WHERE description LIKE '%securemail%' OR description LIKE '%create_schema%' OR description LIKE '%create_mail%' OR description LIKE '%create_encryption%' OR description LIKE '%create_template%' OR description LIKE '%create_email%'"
     )
     .await
     .ok();
