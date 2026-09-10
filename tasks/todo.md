@@ -74,15 +74,62 @@ because it is reached only through `sqlx-macros`/`sqlx-mysql`, and this service 
 postgres. Reporting this as "audit at zero" would be false; reporting it as a blocker
 would be wrong.
 
-**Left deliberately untouched.** `.env.example` carries an uncommitted edit
-(`5433` → `5435`) that predates this unit and that I did not author. It is factually
-correct — the `ods-postgres` container is published on `127.0.0.1:5435` and the local
-`.env` already says 5435 — but it contradicts the port documented in `CLAUDE.md`, so
-reconciling the two is a dev-environment concern and not part of a security decision.
-Flagged in the status rather than folded into this diff.
+**The dangling `.env.example` edit, now closed (2026-09-10).** The previous pass found an
+uncommitted `5433` → `5435` edit it had not authored and left it alone, because it
+contradicted the port documented in `CLAUDE.md` and nothing said which of the two was
+right. It is now measured rather than guessed: `127.0.0.1:5433` is
+`honcho-poc-database-1` (`pgvector/pgvector:pg15`), an unrelated project, while
+`ods-postgres` publishes on `127.0.0.1:5435`. Both ports answer, which is exactly why the
+wrong one is a trap and not a connection error — `.env.example` was pointing a fresh
+checkout at another project's database with ODS credentials. The edit is therefore
+committed and `CLAUDE.md` aligned with it, in a `docs` commit kept separate from the
+security diff.
 
-**Note for whoever runs the integration tests.** They fail `VersionMissing(7)` against the
-shared `ods` database: `public._sqlx_migrations` holds a `version 7` row belonging to
-another service, and the harness only clears versions 1–6. Run them against the scratch
-database `securemail_h2_verify` instead — the shared table must not be cleaned, it is
-shared by design.
+**The integration-test note above is obsolete.** It said the six integration tests fail
+`VersionMissing(7)` against the shared `ods` database and must be run against the scratch
+database `securemail_h2_verify`. Both halves have since been fixed elsewhere:
+HR-20260910-006 created the `securemail` schema on `ods-postgres` and commit `4d4669a`
+qualified the harness's two `DELETE FROM _sqlx_migrations` to
+`securemail._sqlx_migrations`. Measured today against the shared `ods` database on 5435:
+**37 tests, 0 failed, 0 ignored** — 28 unit + 3 guards + 6 integration. The scratch
+database `securemail_h2_verify` no longer exists (purged under BR-0011); do not recreate
+it.
+
+### Re-verification, 2026-09-10
+
+Re-run end to end on `feat/securemail-c20260909-1345-lot0` before closing the unit, since
+the branch had not been re-measured since the ods-common promotion:
+
+| check | result |
+|---|---|
+| `cargo tree -e normal \| grep 'h2 v0.3'` | no match |
+| `cargo tree -e normal -i h2` | `h2 v0.4.19` only, via `hyper` ← `tonic`/`reqwest` (patched, `>= 0.4.16`) |
+| `cargo tree -e normal -i rsa` | *nothing to print* — RUSTSEC-2023-0071 not shipped |
+| `cargo tree -e normal \| grep 'protobuf v2.'` | no match — the second guard still holds |
+| `cargo audit` | 1 vulnerability: RUSTSEC-2023-0071 only. **RUSTSEC-2026-0258 absent.** |
+| `cargo fmt --check` | clean |
+| `cargo clippy --all-targets -- -D warnings` | exit 0 |
+| `cargo test` | 37 passed, 0 failed, 0 ignored |
+
+No `.cargo/audit.toml` exists in this repo, so there was no `RUSTSEC-2026-0258` ignore to
+remove — the advisory is cleared on the graph, not silenced.
+
+**Also declared, not fixed (BR-0010).** `cargo audit` reports six allowed warnings. None
+is a vulnerability and none is in scope for a decision about `h2`, but they are traced
+here rather than left implicit, with their shipped-graph status measured one by one
+(`cargo tree -e normal -i <crate>`):
+
+| crate | warning | in the shipped graph? |
+|---|---|---|
+| `chacha20 0.10.0` | yanked | yes, via `rand 0.10.1` |
+| `anyhow 1.0.102` | unsound (RUSTSEC-2026-0190) | yes, direct dependency |
+| `rustls-pemfile 2.2.0` | unmaintained (RUSTSEC-2025-0134) | yes, via `sqlx`'s rustls TLS |
+| `proc-macro-error2 2.0.1` | unmaintained (RUSTSEC-2026-0173) | yes, proc-macro edge |
+| `event-listener 5.4.1` | unsound (RUSTSEC-2026-0221) | two major lines coexist |
+| `spin 0.9.8` | yanked | **no** — reached only via `sqlx-mysql`/`sqlx-sqlite` |
+
+The one that is tempting to "fix" is `chacha20`: it arrives through `rand 0.10.1`, which
+this manifest pins at `>= 0.9.3` on purpose for RUSTSEC-2026-0097. Downgrading that pin to
+dodge a *yanked* warning would reopen a real advisory. Left as is, deliberately. The rest
+belong to a dependency-hygiene unit, not to this one — the runbook's §8 is explicit that
+one unit carries one subject.
