@@ -1,7 +1,10 @@
 # Dev Agent Memory
 
 ## ODS Shared DB Migrations
-- All ODS services share a single PostgreSQL instance (ods-postgres, port **5435** — verified 2026-09-10; 5433 is a different server)
+- All ODS services share a single PostgreSQL instance: `ods-postgres` (see CLAUDE.md for the DSN).
+  The agent host publishes SEVERAL postgres on adjacent ports (5432 host, 5433 `honcho-poc`, 5434 `otodesk`,
+  5435 `ods-postgres`). **An open port is not proof of the right server** — name the listener's owner with
+  `docker ps --format '{{.Names}} {{.Ports}}'` before trusting a DSN.
 - Migrations MUST use `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`
 - RLS policies need `DO $$ BEGIN IF NOT EXISTS ... END $$` wrapper
 - The `ods` user is superuser and bypasses RLS, so list queries must include explicit `tenant_id` filter (defense-in-depth)
@@ -27,3 +30,4 @@
 - [ods-common promotion delta](project_ods_common_promotion_delta.md) — a `dev`→`staging` promotion ships the whole delta; `full` grows, measure the consumer graph first
 - [Shared DB migration tracking](project_shared_db_migration_tracking.md) — registry now isolated in the `securemail` schema; check WHERE the registry is before blaming code; no throwaway DB needed
 - [Cargo feature activators](project_cargo_feature_activators.md) — for feature-gated advisories, enumerate who ACTIVATES the feature, and re-read the advisory's patched range
+- [Work-item intent is frozen](project_workitem_intent_is_frozen.md) — the intent text never updates; measure the branch before re-applying what it asks
