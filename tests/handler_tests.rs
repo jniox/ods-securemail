@@ -13,9 +13,35 @@ use ods_securemail::api::{health, mail_configs};
 use ods_securemail::events::producer::InMemoryProducer;
 use ods_securemail::repository::{db, mail_config::MailConfigRepository};
 use ods_securemail::service::mail_config_service::MailConfigService;
+use ods_securemail::service::smtp_verifier::{FixedSmtpVerifier, SmtpVerifier, SmtpVerifyError};
 use sqlx::Executor;
 
 const TEST_SECRET: &[u8] = b"ods-common-test-secret-32-chars!";
+
+/// Les migrations tournent UNE fois par binaire de test, pas une fois par test.
+///
+/// Chaque test ouvrait sa propre piscine, effacait les lignes 1-6 du registre puis
+/// rejouait les migrations. A onze tests en parallele sur le MEME schema, un test pouvait
+/// effacer le registre pendant qu'un autre migrait, et un `ALTER TABLE ... ENABLE ROW
+/// LEVEL SECURITY` concurrent d'un INSERT rendait un 500 qui n'avait rien a voir avec le
+/// code teste. L'ordre destructeur reste qualifie par son schema (lecon du 2026-09-10).
+static SCHEMA_READY: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+
+async fn ensure_schema(pool: &sqlx::PgPool) {
+    SCHEMA_READY
+        .get_or_init(|| async {
+            pool.execute(
+                "DELETE FROM securemail._sqlx_migrations WHERE version IN (1, 2, 3, 4, 5, 6)",
+            )
+            .await
+            .ok();
+
+            db::run_migrations(pool)
+                .await
+                .expect("Failed to run securemail migrations");
+        })
+        .await;
+}
 
 fn test_jwt_config() -> web::Data<JwtConfig> {
     web::Data::new(JwtConfig::new_hs256(TEST_SECRET, false))
@@ -60,6 +86,25 @@ async fn setup_app_with_db() -> (
     Uuid,
     Uuid,
 ) {
+    // Par defaut le dial est une doublure qui accepte : les tests de CRUD n'ont rien a
+    // dire sur la messagerie. Les tests de `/verify` injectent le verdict qu'ils veulent.
+    setup_app_with_verifier(Arc::new(FixedSmtpVerifier::accepting()), None).await
+}
+
+/// `identity` fixe le couple (utilisateur, tenant) — utile quand un test doit rejouer
+/// une requete sur la MEME configuration avec un autre verdict de dial.
+async fn setup_app_with_verifier(
+    smtp_verifier: Arc<dyn SmtpVerifier>,
+    identity: Option<(Uuid, Uuid)>,
+) -> (
+    impl actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse,
+        Error = actix_web::Error,
+    >,
+    Uuid,
+    Uuid,
+) {
     let _ = dotenvy::dotenv();
     // Initialize tracing for test debugging
     let _ = tracing_subscriber::fmt()
@@ -74,16 +119,7 @@ async fn setup_app_with_db() -> (
         .await
         .expect("Failed to create pool");
 
-    // Clear stale migration tracking so idempotent migrations can re-run cleanly.
-    // We delete by version (1-6) which are the securemail-specific migrations.
-    pool.execute("DELETE FROM securemail._sqlx_migrations WHERE version IN (1, 2, 3, 4, 5, 6)")
-        .await
-        .ok();
-
-    // Run migrations (all use IF NOT EXISTS so they're idempotent)
-    db::run_migrations(&pool)
-        .await
-        .expect("Failed to run securemail migrations");
+    ensure_schema(&pool).await;
 
     let producer = Arc::new(InMemoryProducer::new());
     // 32-byte key for AES-256
@@ -94,10 +130,10 @@ async fn setup_app_with_db() -> (
         repo,
         producer as Arc<dyn ods_common::events::EventProducer>,
         master_key,
+        smtp_verifier,
     ));
 
-    let user_id = Uuid::new_v4();
-    let tenant_id = Uuid::new_v4();
+    let (user_id, tenant_id) = identity.unwrap_or_else(|| (Uuid::new_v4(), Uuid::new_v4()));
 
     let jwt_config = test_jwt_config();
     let pool_data = web::Data::new(pool);
@@ -127,6 +163,10 @@ async fn setup_app_with_db() -> (
             .route(
                 "/api/v1/mail-configs/{id}",
                 web::delete().to(mail_configs::delete_mail_config),
+            )
+            .route(
+                "/api/v1/mail-configs/{id}/verify",
+                web::post().to(mail_configs::verify_mail_config),
             ),
     )
     .await;
@@ -293,17 +333,7 @@ async fn test_db_connectivity() {
         .await
         .expect("Failed to create pool");
 
-    // Clear stale migration tracking so idempotent migrations can re-run cleanly
-    pool.execute(
-        "DELETE FROM securemail._sqlx_migrations WHERE description LIKE '%securemail%' OR description LIKE '%create_schema%' OR description LIKE '%create_mail%' OR description LIKE '%create_encryption%' OR description LIKE '%create_template%' OR description LIKE '%create_email%'"
-    )
-    .await
-    .ok();
-
-    // Run migrations
-    db::run_migrations(&pool)
-        .await
-        .expect("Failed to run securemail migrations");
+    ensure_schema(&pool).await;
 
     // Check table exists
     let row: (i64,) = sqlx::query_as(
@@ -323,4 +353,212 @@ async fn test_db_connectivity() {
         .execute(&pool)
         .await;
     eprintln!("set_config result: {:?}", result);
+}
+
+/// Cree une configuration de messagerie et rend son identifiant.
+async fn create_config<S>(app: &S, token: &str, name: &str) -> String
+where
+    S: actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse,
+        Error = actix_web::Error,
+    >,
+{
+    let req = test::TestRequest::post()
+        .uri("/api/v1/mail-configs")
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .insert_header(("Content-Type", "application/json"))
+        .set_json(json!({
+            "name": name,
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 587,
+            "smtp_username": "user@example.com",
+            "smtp_password": "secret123",
+            "smtp_encryption": "starttls",
+            "from_address": "noreply@example.com",
+            "from_name": "Test Sender",
+            "is_default": false
+        }))
+        .to_request();
+
+    let resp = test::call_service(app, req).await;
+    let status = resp.status();
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(
+        status,
+        actix_web::http::StatusCode::CREATED,
+        "create failed: {body}"
+    );
+    body["id"].as_str().expect("id").to_string()
+}
+
+async fn read_verified_flag<S>(app: &S, token: &str, config_id: &str) -> bool
+where
+    S: actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse,
+        Error = actix_web::Error,
+    >,
+{
+    let req = test::TestRequest::get()
+        .uri(&format!("/api/v1/mail-configs/{config_id}"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(app, req).await;
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    body["verified"].as_bool().expect("verified flag")
+}
+
+/// AC-006 — le verdict rendu est celui du dial, et il est persiste.
+#[actix_rt::test]
+async fn test_verify_accepts_when_the_dial_succeeds() {
+    let (app, user_id, tenant_id) =
+        setup_app_with_verifier(Arc::new(FixedSmtpVerifier::accepting()), None).await;
+    let token = make_test_jwt(&user_id, &tenant_id);
+    let config_id = create_config(&app, &token, "Verify OK").await;
+
+    assert!(
+        !read_verified_flag(&app, &token, &config_id).await,
+        "a fresh config starts unverified"
+    );
+
+    let req = test::TestRequest::post()
+        .uri(&format!("/api/v1/mail-configs/{config_id}/verify"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["verified"], true, "body: {body}");
+
+    assert!(
+        read_verified_flag(&app, &token, &config_id).await,
+        "a successful dial must be persisted"
+    );
+}
+
+/// AC-006 — le coeur du defaut signale : un serveur qui refuse ne doit PAS passer.
+#[actix_rt::test]
+async fn test_verify_refuses_when_the_dial_fails() {
+    let (app, user_id, tenant_id) = setup_app_with_verifier(
+        Arc::new(FixedSmtpVerifier::rejecting(SmtpVerifyError::Auth(
+            "The mail server rejected the credentials for this configuration".to_string(),
+        ))),
+        None,
+    )
+    .await;
+    let token = make_test_jwt(&user_id, &tenant_id);
+    let config_id = create_config(&app, &token, "Verify KO").await;
+
+    let req = test::TestRequest::post()
+        .uri(&format!("/api/v1/mail-configs/{config_id}/verify"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["verified"], false, "body: {body}");
+    assert_eq!(body["reason"], "auth", "body: {body}");
+
+    assert!(
+        !read_verified_flag(&app, &token, &config_id).await,
+        "a refused dial must never leave the config marked verified"
+    );
+}
+
+/// AC-006 — une configuration deja verifiee redevient non verifiee si le serveur cesse
+/// de repondre : le drapeau suit le monde reel, il ne se contente pas d'etre mis une fois.
+#[actix_rt::test]
+async fn test_verify_unsets_the_flag_when_the_server_stops_answering() {
+    let user_id = Uuid::new_v4();
+    let tenant_id = Uuid::new_v4();
+    let token = make_test_jwt(&user_id, &tenant_id);
+
+    let (app_ok, _, _) = setup_app_with_verifier(
+        Arc::new(FixedSmtpVerifier::accepting()),
+        Some((user_id, tenant_id)),
+    )
+    .await;
+    let config_id = create_config(&app_ok, &token, "Verify then break").await;
+
+    let req = test::TestRequest::post()
+        .uri(&format!("/api/v1/mail-configs/{config_id}/verify"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    test::call_service(&app_ok, req).await;
+    assert!(read_verified_flag(&app_ok, &token, &config_id).await);
+
+    // Meme tenant, meme configuration, mais le serveur ne repond plus.
+    let (app_ko, _, _) = setup_app_with_verifier(
+        Arc::new(FixedSmtpVerifier::rejecting(SmtpVerifyError::Connect(
+            "The mail server could not be reached".to_string(),
+        ))),
+        Some((user_id, tenant_id)),
+    )
+    .await;
+
+    let req = test::TestRequest::post()
+        .uri(&format!("/api/v1/mail-configs/{config_id}/verify"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .to_request();
+    let resp = test::call_service(&app_ko, req).await;
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["verified"], false, "body: {body}");
+    assert_eq!(body["reason"], "connect", "body: {body}");
+
+    assert!(
+        !read_verified_flag(&app_ko, &token, &config_id).await,
+        "the flag must follow the last dial, not the first one"
+    );
+}
+
+/// AC-007 — le 409 passe par la route, pas seulement par le type d'erreur.
+#[actix_rt::test]
+async fn test_409_duplicate_config_name_for_the_same_tenant() {
+    let (app, user_id, tenant_id) = setup_app_with_db().await;
+    let token = make_test_jwt(&user_id, &tenant_id);
+
+    let name = format!("Duplicate {}", Uuid::new_v4());
+    create_config(&app, &token, &name).await;
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/mail-configs")
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .insert_header(("Content-Type", "application/json"))
+        .set_json(json!({
+            "name": name,
+            "smtp_host": "smtp.other.example.com",
+            "smtp_port": 465,
+            "smtp_username": "someone@example.com",
+            "smtp_password": "another-secret",
+            "smtp_encryption": "tls",
+            "from_address": "noreply@example.com",
+            "from_name": "Test Sender",
+            "is_default": false
+        }))
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(
+        resp.status(),
+        actix_web::http::StatusCode::CONFLICT,
+        "a second config with the same name for the same tenant must be refused"
+    );
+    // Le corps est celui d'`ods-common` : il donne la FAMILLE d'erreur et rien du contenu
+    // en conflit — c'est voulu, un message d'erreur ne doit pas confirmer l'existence d'une
+    // ressource. La preuve attendue ici est le 409 rendu par la route, pas le texte.
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["error"], "conflict", "body: {body}");
+}
+
+/// Le meme nom chez un AUTRE tenant n'est pas un conflit — l'unicite est par tenant.
+#[actix_rt::test]
+async fn test_the_same_name_is_free_for_another_tenant() {
+    let name = format!("Shared name {}", Uuid::new_v4());
+
+    let (app_a, user_a, tenant_a) = setup_app_with_db().await;
+    create_config(&app_a, &make_test_jwt(&user_a, &tenant_a), &name).await;
+
+    let (app_b, user_b, tenant_b) = setup_app_with_db().await;
+    create_config(&app_b, &make_test_jwt(&user_b, &tenant_b), &name).await;
 }

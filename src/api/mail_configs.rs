@@ -73,18 +73,20 @@ pub async fn delete_mail_config(
 }
 
 /// POST /api/v1/mail-configs/{id}/verify
+///
+/// Compose reellement le serveur du tenant (TCP, TLS/STARTTLS, EHLO, AUTH) et rend son
+/// verdict. 200 signifie « la verification a eu lieu » ; c'est `verified` dans le corps
+/// qui dit si elle a reussi. Un 4xx/5xx ici voudrait dire que la verification n'a pas pu
+/// etre conduite du tout (configuration inconnue, cle de chiffrement hors service).
 pub async fn verify_mail_config(
     auth: AuthContext,
     svc: web::Data<MailConfigService>,
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let id = path.into_inner();
-    let _config = svc.verify(auth.tenant_id, id).await?;
+    let outcome = svc.verify(auth.tenant_id, id).await?;
 
-    Ok(HttpResponse::Ok().json(serde_json::json!({
-        "verified": true,
-        "message": "Connection successful"
-    })))
+    Ok(HttpResponse::Ok().json(outcome.to_response()))
 }
 
 #[derive(Debug, serde::Deserialize)]

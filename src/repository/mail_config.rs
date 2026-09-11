@@ -112,6 +112,50 @@ impl MailConfigRepository {
         Ok(config)
     }
 
+    /// Lit une configuration AVEC son mot de passe SMTP chiffre.
+    ///
+    /// Separe de [`Self::get_by_id`] a dessein : le secret ne quitte le depot que lorsque
+    /// l'appelant en a besoin pour composer, et il doit le demander en toutes lettres.
+    /// Les deux lectures tiennent dans la MEME transaction tenant, donc sous la meme
+    /// politique RLS et sur le meme instantane.
+    pub async fn get_with_smtp_password(
+        &self,
+        tenant_id: Uuid,
+        id: Uuid,
+    ) -> AppResult<(MailConfig, Vec<u8>)> {
+        let mut tx = begin_tenant_tx(&self.pool, tenant_id).await?;
+
+        let config = sqlx::query_as::<_, MailConfig>(
+            r#"
+            SELECT id, tenant_id, name, smtp_host, smtp_port, smtp_username,
+                   smtp_encryption, imap_host, imap_port, imap_username, imap_encryption,
+                   from_address, from_name, is_default, verified, deleted_at, created_at, updated_at
+            FROM securemail.mail_configs
+            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+            "#,
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("mail config {id} not found")))?;
+
+        let (smtp_password_encrypted,): (Vec<u8>,) = sqlx::query_as(
+            r#"
+            SELECT smtp_password_encrypted
+            FROM securemail.mail_configs
+            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+            "#,
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok((config, smtp_password_encrypted))
+    }
+
     pub async fn list(
         &self,
         tenant_id: Uuid,

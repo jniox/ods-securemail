@@ -82,8 +82,24 @@ hex = "0.4"
 # Encryption (AES-256-GCM)
 aes-gcm = "0.10"
 
+# Client SMTP, pour que /verify compose vraiment (TCP + EHLO + TLS/STARTTLS + AUTH).
+# Deux fonctionnalites sont ecartees a dessein :
+#   - `dkim` tirerait `rsa` 0.9, porteuse de RUSTSEC-2023-0071 sans correctif amont ;
+#   - `native-tls` tirerait OpenSSL, alors que rustls 0.23 + ring sont deja dans le
+#     graphe livre (via sqlx). Gardes : tests/framework.rs.
+lettre = { version = "0.11", default-features = false, features = [
+    "smtp-transport",
+    "tokio1",
+    "tokio1-rustls-tls",
+    "hostname",
+    "tracing",
+] }
+
 [dev-dependencies]
 actix-rt = "2"
+# Le faux serveur SMTP des tests decode le paquet AUTH PLAIN pour prouver que les
+# identifiants dechiffres voyagent vraiment (arete de developpement uniquement).
+base64 = "0.22"
 actix-http = "3"
 reqwest = { version = "0.12", features = ["json"] }
 dotenvy = "0.15"

@@ -6,15 +6,44 @@ use aes_gcm::{AeadCore, Aes256Gcm, Nonce};
 
 use crate::domain::mail_config::{
     CreateMailConfig, MailConfig, MailConfigResponse, PaginatedResponse, UpdateMailConfig,
+    VerificationResponse,
 };
 use crate::error::{AppError, AppResult};
 use crate::events::producer::{event_types, CloudEvent, EventProducer, EVENT_SOURCE};
 use crate::repository::mail_config::MailConfigRepository;
+use crate::service::smtp_verifier::{SmtpTarget, SmtpVerifier, SmtpVerifyError};
 
 pub struct MailConfigService {
     repo: Arc<MailConfigRepository>,
     event_producer: Arc<dyn EventProducer>,
     master_key: Vec<u8>,
+    smtp_verifier: Arc<dyn SmtpVerifier>,
+}
+
+/// Ce que rend une verification : la configuration telle qu'elle est APRES le verdict,
+/// et la raison de l'echec s'il y en a une.
+pub struct VerificationOutcome {
+    pub config: MailConfig,
+    pub error: Option<SmtpVerifyError>,
+}
+
+impl VerificationOutcome {
+    pub fn verified(&self) -> bool {
+        self.error.is_none()
+    }
+
+    pub fn to_response(&self) -> VerificationResponse {
+        VerificationResponse {
+            config_id: self.config.id,
+            verified: self.verified(),
+            reason: self.error.as_ref().map(|e| e.kind().to_string()),
+            message: match &self.error {
+                None => "SMTP connection verified".to_string(),
+                Some(e) => e.message().to_string(),
+            },
+            checked_at: self.config.updated_at,
+        }
+    }
 }
 
 impl MailConfigService {
@@ -22,11 +51,13 @@ impl MailConfigService {
         repo: Arc<MailConfigRepository>,
         event_producer: Arc<dyn EventProducer>,
         master_key: Vec<u8>,
+        smtp_verifier: Arc<dyn SmtpVerifier>,
     ) -> Self {
         Self {
             repo,
             event_producer,
             master_key,
+            smtp_verifier,
         }
     }
 
@@ -48,7 +79,6 @@ impl MailConfigService {
 
     /// Decrypt a password encrypted with AES-256-GCM.
     /// Input format: nonce (12 bytes) || ciphertext.
-    #[allow(dead_code)]
     fn decrypt_password(&self, encrypted: &[u8]) -> AppResult<String> {
         if encrypted.len() < 12 {
             return Err(AppError::Internal(
@@ -175,26 +205,74 @@ impl MailConfigService {
         self.repo.soft_delete(tenant_id, id).await
     }
 
-    pub async fn verify(&self, tenant_id: Uuid, id: Uuid) -> AppResult<MailConfig> {
-        // In a real implementation, we would attempt SMTP connection here.
-        // For now, we just mark it as verified.
-        let config = self.repo.set_verified(tenant_id, id, true).await?;
+    /// Compose le serveur de messagerie de la configuration et persiste le verdict.
+    ///
+    /// Le mot de passe est dechiffre ici, utilise le temps de l'appel, et jamais rendu.
+    /// Le drapeau `verified` suit le DERNIER dial : une configuration qui cesse de
+    /// repondre redevient non verifiee, sinon le drapeau raconte le passe.
+    pub async fn verify(&self, tenant_id: Uuid, id: Uuid) -> AppResult<VerificationOutcome> {
+        let (config, smtp_password_encrypted) =
+            self.repo.get_with_smtp_password(tenant_id, id).await?;
 
-        // Emit verified event
-        let event = CloudEvent::new(
-            EVENT_SOURCE,
-            event_types::CONFIG_VERIFIED,
-            &config.id.to_string(),
-            tenant_id,
-            serde_json::json!({
-                "config_id": config.id,
-                "name": config.name,
-                "smtp_host": config.smtp_host,
-            }),
-        );
-        let _ = self.event_producer.publish(event).await;
+        // Une erreur ici n'est pas un verdict sur le serveur du tenant : c'est notre cle
+        // qui ne rouvre plus notre propre coffre. Elle remonte en 500, pas en `verified: false`.
+        let password = self.decrypt_password(&smtp_password_encrypted)?;
 
-        Ok(config)
+        let dial = match u16::try_from(config.smtp_port) {
+            Ok(port) => {
+                let target = SmtpTarget {
+                    host: config.smtp_host.clone(),
+                    port,
+                    username: config.smtp_username.clone(),
+                    password,
+                    encryption: config.smtp_encryption.clone(),
+                };
+                self.smtp_verifier.verify(&target).await
+            }
+            Err(_) => Err(SmtpVerifyError::Config(format!(
+                "Invalid SMTP port '{}' stored for this configuration",
+                config.smtp_port
+            ))),
+        };
+
+        let verified = dial.is_ok();
+        let config = self.repo.set_verified(tenant_id, id, verified).await?;
+
+        match &dial {
+            Ok(()) => {
+                tracing::info!(
+                    config_id = %config.id,
+                    tenant_id = %tenant_id,
+                    "SMTP configuration verified"
+                );
+                let event = CloudEvent::new(
+                    EVENT_SOURCE,
+                    event_types::CONFIG_VERIFIED,
+                    &config.id.to_string(),
+                    tenant_id,
+                    serde_json::json!({
+                        "config_id": config.id,
+                        "name": config.name,
+                        "smtp_host": config.smtp_host,
+                    }),
+                );
+                let _ = self.event_producer.publish(event).await;
+            }
+            Err(err) => {
+                // Le motif, jamais le texte brut du serveur ni l'identifiant utilise.
+                tracing::warn!(
+                    config_id = %config.id,
+                    tenant_id = %tenant_id,
+                    reason = err.kind(),
+                    "SMTP verification refused"
+                );
+            }
+        }
+
+        Ok(VerificationOutcome {
+            config,
+            error: dial.err(),
+        })
     }
 
     fn validate_encryption(enc: &str) -> AppResult<()> {
@@ -222,6 +300,7 @@ impl MailConfigService {
 mod tests {
     use super::*;
     use crate::events::producer::InMemoryProducer;
+    use crate::service::smtp_verifier::FixedSmtpVerifier;
 
     fn make_service() -> (MailConfigService, Arc<InMemoryProducer>) {
         // We cannot actually test with the repo without a DB, so we test validation logic
@@ -238,6 +317,7 @@ mod tests {
                 )),
                 event_producer: producer.clone(),
                 master_key,
+                smtp_verifier: Arc::new(FixedSmtpVerifier::accepting()),
             },
             producer,
         )

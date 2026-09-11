@@ -9,6 +9,8 @@ ods-platform
 ## Architecture
 - Domain models: `src/domain/` (MailConfig, EncryptionKey, Template, Email)
 - Service layer: `src/service/` (business logic, orchestrates repo + events)
+  - `smtp_verifier.rs`: `SmtpVerifier` trait + `LettreSmtpVerifier` (real dial) +
+    `FixedSmtpVerifier` (test double). Injected into `MailConfigService`.
 - API handlers: `src/api/` (HTTP handlers, health)
 - Repository: `src/repository/` (PostgreSQL via sqlx, RLS via ods-common::db)
 - Events: `src/events/` (Redpanda/Kafka CloudEvents via ods-common::events)
@@ -31,7 +33,11 @@ ods-platform
 - `GET /api/v1/mail-configs/{id}` — get mail config
 - `PUT /api/v1/mail-configs/{id}` — update mail config
 - `DELETE /api/v1/mail-configs/{id}` — soft-delete mail config
-- `POST /api/v1/mail-configs/{id}/verify` — verify SMTP connection
+- `POST /api/v1/mail-configs/{id}/verify` — dial the tenant's SMTP server for real
+  (TCP + TLS/STARTTLS + EHLO + AUTH with the decrypted password) and persist the verdict.
+  Always 200 when the check could be RUN; the verdict is in the body:
+  `{"config_id", "verified", "message", "reason"?, "checked_at"}`.
+  `reason` is one of `connect | auth | protocol | config` when `verified` is false.
 
 ## Multi-Tenancy
 - JWT auth via ods-common (AuthContext extractor with tenant_id)
@@ -55,6 +61,7 @@ Connection: postgres://ods:ods-dev-2026@127.0.0.1:5435/ods
 - `KAFKA_BROKERS` / `REDPANDA_BROKERS` (default: localhost:9092)
 - `KAFKA_TOPIC` / `REDPANDA_TOPIC` (default: ods.securemail.events)
 - `MASTER_ENCRYPTION_KEY` (required, 32-byte hex string for AES-256)
+- `SMTP_VERIFY_TIMEOUT_SECS` (default: 10, clamped to [1, 60]) — whole-dial timeout of `/verify`
 - JWT: `JWT_RSA_PUBLIC_KEY_B64` + `JWT_ISSUER` + `JWT_AUDIENCE` (RS256 production)
   or `JWT_ALLOW_HS256=true` + `JWT_SECRET` (HS256 dev only)
 - `LOG_LEVEL` (default: info)

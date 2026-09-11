@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use actix_web::{web, App, HttpServer};
 use tracing_actix_web::TracingLogger;
@@ -10,6 +11,7 @@ use ods_securemail::config::AppConfig;
 use ods_securemail::events::producer::{InMemoryProducer, RedpandaProducer};
 use ods_securemail::repository::{db, mail_config::MailConfigRepository};
 use ods_securemail::service::mail_config_service::MailConfigService;
+use ods_securemail::service::smtp_verifier::{LettreSmtpVerifier, SmtpVerifier};
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -68,12 +70,22 @@ async fn main() -> std::io::Result<()> {
     let master_key = hex::decode(&config.master_encryption_key)
         .expect("MASTER_ENCRYPTION_KEY must be valid hex (validated at startup)");
 
+    // Composeur SMTP reel : c'est lui qui rend `/verify` autre chose qu'une constante.
+    let smtp_verifier: Arc<dyn SmtpVerifier> = Arc::new(LettreSmtpVerifier::new(
+        Duration::from_secs(config.smtp_verify_timeout_secs),
+    ));
+    tracing::info!(
+        timeout_secs = config.smtp_verify_timeout_secs,
+        "SMTP verification enabled"
+    );
+
     // Create repository and service
     let mail_config_repo = Arc::new(MailConfigRepository::new(pool.clone()));
     let mail_config_svc = web::Data::new(MailConfigService::new(
         mail_config_repo,
         event_producer.clone(),
         master_key,
+        smtp_verifier,
     ));
 
     let pool_data = web::Data::new(pool.clone());

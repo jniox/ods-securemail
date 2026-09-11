@@ -55,4 +55,34 @@ mod tests {
         assert_eq!(body["status"], "healthy");
         assert_eq!(body["service"], "securemail");
     }
+
+    /// La sonde de disponibilite doit DIRE non quand la base ne repond pas.
+    ///
+    /// Sans ce test, le 503 n'etait qu'une intention : l'orchestrateur aurait continue a
+    /// router du trafic vers une instance sans base. On pointe la piscine sur un port ou
+    /// rien n'ecoute (`connect_lazy` n'ouvre rien avant la premiere requete).
+    #[actix_rt::test]
+    async fn test_ready_returns_503_when_the_database_is_unreachable() {
+        // Delai d'acquisition court : sinon la piscine reessaie de se connecter pendant
+        // ses 30 secondes par defaut et le test tient le binaire en otage.
+        let dead_pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(300))
+            .connect_lazy("postgres://nobody:nobody@127.0.0.1:1/nothing")
+            .expect("a lazy pool is built without touching the network");
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(dead_pool))
+                .route("/ready", web::get().to(ready)),
+        )
+        .await;
+
+        let req = test::TestRequest::get().uri("/ready").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 503);
+
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["status"], "not_ready");
+        assert_eq!(body["database"], false);
+    }
 }

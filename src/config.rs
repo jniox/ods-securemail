@@ -12,6 +12,8 @@ pub struct AppConfig {
     pub cors_allowed_origins: Vec<String>,
     pub max_body_size: usize,
     pub master_encryption_key: String,
+    /// Delai d'attente, en secondes, d'une verification de connexion SMTP.
+    pub smtp_verify_timeout_secs: u64,
 }
 
 impl AppConfig {
@@ -42,6 +44,14 @@ impl AppConfig {
         let kafka_topic = env::var("KAFKA_TOPIC")
             .or_else(|_| env::var("REDPANDA_TOPIC"))
             .unwrap_or_else(|_| "ods.securemail.events".to_string());
+
+        // Borne haute ET basse : un 0 rendrait toute verification impossible, et une
+        // valeur enorme immobiliserait un ouvrier HTTP sur un hote qui ne repond pas.
+        let smtp_verify_timeout_secs = env::var("SMTP_VERIFY_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(crate::service::smtp_verifier::DEFAULT_TIMEOUT_SECS)
+            .clamp(1, 60);
 
         let database_url = env::var("DATABASE_URL")
             .map_err(|_| "DATABASE_URL environment variable is required".to_string())?;
@@ -85,6 +95,7 @@ impl AppConfig {
             cors_allowed_origins,
             max_body_size,
             master_encryption_key,
+            smtp_verify_timeout_secs,
         })
     }
 
@@ -277,6 +288,43 @@ mod tests {
                 );
             },
         );
+    }
+
+    #[test]
+    fn test_smtp_verify_timeout_defaults_and_is_clamped() {
+        let key = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+
+        with_env_vars(
+            &[
+                ("DATABASE_URL", "postgres://test:test@localhost/test"),
+                ("MASTER_ENCRYPTION_KEY", key),
+            ],
+            || {
+                unsafe { env::remove_var("SMTP_VERIFY_TIMEOUT_SECS") };
+                let config = AppConfig::from_env().unwrap();
+                assert_eq!(
+                    config.smtp_verify_timeout_secs,
+                    crate::service::smtp_verifier::DEFAULT_TIMEOUT_SECS
+                );
+            },
+        );
+
+        for (raw, expected) in [("0", 1), ("5", 5), ("600", 60), ("pas-un-nombre", 10)] {
+            with_env_vars(
+                &[
+                    ("DATABASE_URL", "postgres://test:test@localhost/test"),
+                    ("MASTER_ENCRYPTION_KEY", key),
+                    ("SMTP_VERIFY_TIMEOUT_SECS", raw),
+                ],
+                || {
+                    let config = AppConfig::from_env().unwrap();
+                    assert_eq!(
+                        config.smtp_verify_timeout_secs, expected,
+                        "SMTP_VERIFY_TIMEOUT_SECS={raw}"
+                    );
+                },
+            );
+        }
     }
 
     #[test]
