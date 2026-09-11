@@ -31,3 +31,4 @@
 - [Shared DB migration tracking](project_shared_db_migration_tracking.md) — registry now isolated in the `securemail` schema; check WHERE the registry is before blaming code; no throwaway DB needed
 - [Cargo feature activators](project_cargo_feature_activators.md) — for feature-gated advisories, enumerate who ACTIVATES the feature, and re-read the advisory's patched range
 - [Work-item intent is frozen](project_workitem_intent_is_frozen.md) — the intent text never updates; measure the branch before re-applying what it asks
+- [Running securemail locally](project_running_securemail_locally.md) — the repo `.env` is a placeholder: pass a throwaway key + HS256 secret; ports <1024 cannot be bound here
