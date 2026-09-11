@@ -133,3 +133,92 @@ this manifest pins at `>= 0.9.3` on purpose for RUSTSEC-2026-0097. Downgrading t
 dodge a *yanked* warning would reopen a real advisory. Left as is, deliberately. The rest
 belong to a dependency-hygiene unit, not to this one — the runbook's §8 is explicit that
 one unit carries one subject.
+
+---
+
+## Task: lot 1 — la verification SMTP dialogue vraiment, et le 409 est prouve par la route
+
+> Ouvert le 2026-09-11 apres la revue BA du 2026-09-10 (commit 042d36c, 5/7 MET, 1 PARTIAL,
+> 1 MISSING). Les deux criteres restants sont des taches en attente, pas des defauts de spec :
+> aucune decision de cadrage de `business-rules.md` (BR-0001 a BR-0013) ne les contredit.
+
+### Objectif
+1. **AC-006 (MISSING, HIGH)** — `POST /api/v1/mail-configs/{id}/verify` rend `verified: true`
+   sans jamais parler a un serveur. Le faire composer pour de vrai : TCP, TLS/STARTTLS selon
+   `smtp_encryption`, EHLO, AUTH avec le mot de passe dechiffre, QUIT. Le verdict rendu et
+   persiste doit etre celui du serveur.
+2. **AC-007 (PARTIAL, MEDIUM)** — le 409 (nom de configuration deja pris pour ce tenant) n'est
+   prouve qu'au niveau du type d'erreur. Le prouver par la route HTTP.
+3. **AC-001 (note)** — `/ready` rend 503 quand la base est injoignable : logique presente,
+   jamais exercee. Un test la conduit.
+
+### Plan
+- [ ] Tests d'abord : faux serveur SMTP local (tokio) + cas succes / AUTH refuse / port ferme
+- [ ] `src/service/smtp_verifier.rs` : trait `SmtpVerifier` (dyn-compatible, style `EventProducer`)
+      + `SmtpTarget` (mot de passe redige au Debug) + erreurs classees
+- [ ] Implementation reelle sur `lettre` (pas de `dkim` : sinon `rsa` et RUSTSEC-2023-0071)
+- [ ] `MailConfigService::verify` : lit la config + le mot de passe chiffre, dechiffre, compose,
+      persiste le verdict reel, n'emet `config.verified` que sur succes
+- [ ] Depot : `get_with_smtp_password` (le SELECT actuel ne ramene pas le secret)
+- [ ] Handler : rend le verdict, jamais une constante
+- [ ] Tests de route : verify OK / verify KO / 409 duplique / 503 sur `/ready`
+- [ ] `SMTP_VERIFY_TIMEOUT_SECS` dans config + `.env.example`
+- [ ] Gardes du lot 0 toujours vertes (h2 0.3 absent, protobuf 2.x absent), fmt, clippy, audit
+
+### Risques
+- Nouvelle dependance reseau (`lettre`) : mesurer le graphe livre AVANT de commiter (BR-0010)
+- Le faux serveur de test doit ecouter sur un port ephemere : la validation metier n'accepte
+  que 25/465/587, donc le dial reel se teste sous le trait, pas a travers `POST /mail-configs`
+- Un `verify` qui compose pour de vrai devient une porte SSRF : le timeout est obligatoire
+
+### Rollback
+`git revert` du commit du lot ; aucune migration, aucun changement de schema.
+
+### Verification
+`cargo test` (tout vert, dont les 2 gardes du lot 0), `cargo clippy --all-targets -- -D warnings`,
+`cargo fmt --check`, `cargo tree -e normal | grep -E 'h2 v0.3|protobuf v2\.'` vide, `cargo audit`.
+
+### Review — 2026-09-11
+
+Fait. `cargo test` : **55 tests verts** (34 unite + 3 gardes du lot 0 + 11 route + 5
+composeur + 2 bout-en-bout), contre 37 avant le lot.
+
+| critere BA | avant | preuve apportee |
+|---|---|---|
+| AC-006 (MISSING) | `verify()` ecrivait `true` sans rien composer | `src/service/smtp_verifier.rs` (dial reel) ; `tests/smtp_verifier_tests.rs` : 5 tests contre un faux serveur SMTP qui garde la transcription — EHLO puis AUTH PLAIN dont le paquet decode porte les identifiants ; refus, port ferme, serveur muet, mode de chiffrement inconnu |
+| AC-006 (bout en bout) | — | `tests/verify_flow_tests.rs` : le mot de passe chiffre AES-256-GCM en base ressort intact au bout du fil, et le verdict est relu en base |
+| AC-007 (PARTIAL) | 409 prouve seulement au niveau du type d'erreur | `tests/handler_tests.rs::test_409_duplicate_config_name_for_the_same_tenant` (par la route) + `test_the_same_name_is_free_for_another_tenant` (l'unicite est bien PAR TENANT) |
+| AC-001 (note) | chemin 503 de `/ready` jamais exerce | `src/api/health.rs::test_ready_returns_503_when_the_database_is_unreachable` |
+
+Trois choses trouvees en chemin, qui n'etaient pas au plan :
+
+1. **Le delai de `lettre` ne borne que l'etablissement TCP.** Un serveur qui accepte la
+   connexion puis se tait laissait la requete pendue sans fin. La borne est posee autour de
+   l'echange entier, et un test la tient.
+2. **Le banc de test se marchait dessus.** Chaque test effacait les lignes 1-6 du registre
+   de migrations puis rejouait les migrations, sur le MEME schema partage ; a onze tests en
+   parallele, un 500 sans rapport avec le code testait remontait au hasard. Les migrations
+   tournent maintenant une fois par binaire (`OnceCell`). L'ordre destructeur reste qualifie
+   par son schema.
+3. **Le corps d'erreur d'`ods-common` ne nomme pas la ressource en conflit** (« A conflicting
+   record already exists »). C'est voulu — un message d'erreur n'a pas a confirmer
+   l'existence d'une ressource — donc le test du 409 lit la famille d'erreur, pas le texte.
+
+Dependance ajoutee : `lettre` 0.11, sans `dkim` (qui tirerait `rsa` 0.9 / RUSTSEC-2023-0071)
+ni `native-tls`. Graphe livre mesure APRES (BR-0010) :
+
+| mesure | resultat |
+|---|---|
+| `cargo tree -e normal \| grep 'h2 v0.3'` | aucune ligne |
+| `cargo tree -e normal \| grep 'protobuf v2\.'` | aucune ligne |
+| `cargo tree -e normal -i rsa` | *nothing to print* — RUSTSEC-2023-0071 hors du graphe livre |
+| `cargo audit` | 1 vulnerabilite (RUSTSEC-2023-0071, via `sqlx-mysql`, sans correctif amont) + 6 avertissements — **strictement identique au lot 0** |
+| `cargo clippy --all-targets -- -D warnings` | sortie 0 |
+| `cargo fmt --check` | propre |
+
+**Hors perimetre, signale et non traite** : securemail n'a toujours aucun `spec.md`
+(`~/dev/specs/ods-platform/specs/securemail/` n'existe pas) — la revue BA se construit sur
+le brief GTM faute de mieux, ce qu'elle signale elle-meme en deviation MEDIUM. Cela releve
+d'une passe de cadrage, pas d'un lot de developpement. Restent aussi ouverts et traces dans
+l'ADR : la liste des ports admis (25/465/587, qui exclut le 2525 des relais), `CONFIG_UPDATED`
+non emis et le garde-fou RBAC — ces deux derniers explicitement portes en Phase 2 par le brief.
