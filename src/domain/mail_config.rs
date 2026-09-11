@@ -141,6 +141,22 @@ pub struct UpdateMailConfig {
     pub is_default: Option<bool>,
 }
 
+/// Resultat d'une verification de connexion SMTP.
+///
+/// Le point d'entree rend TOUJOURS 200 quand la verification a pu etre CONDUITE : c'est un
+/// diagnostic, et « le serveur du tenant refuse les identifiants » est un resultat, pas une
+/// panne de ce service. Le verdict est donc dans le corps — `verified`, et `reason` pour la
+/// famille d'echec (connect, auth, protocol, config) — jamais dans le seul code HTTP.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationResponse {
+    pub config_id: Uuid,
+    pub verified: bool,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub checked_at: DateTime<Utc>,
+}
+
 /// Paginated list response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaginatedResponse<T> {

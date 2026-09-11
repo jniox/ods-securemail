@@ -6,11 +6,33 @@ description = "ODS Platform — SecureMail Service"
 authors = ["ODS Platform <dev@orbusdigital.com>"]
 
 [dependencies]
-# ODS shared library
-ods-common = { git = "https://github.com/jniox/ods-common", branch = "staging", features = ["full"] }
+# ODS shared library.
+# Les fonctionnalites sont nommees une a une, et non prises via `full` : `full`
+# inclut desormais `metrics` (endpoint Prometheus), que ce service n'expose pas et
+# qui ferait entrer protobuf 2.28.0 / RUSTSEC-2024-0437 dans le graphe livre.
+# Cette liste est exactement `full` prive de `metrics`. Garde : tests/framework.rs.
+ods-common = { git = "https://github.com/jniox/ods-common", branch = "staging", default-features = false, features = [
+    "auth",
+    "events",
+    "events-pubsub",
+    "db",
+    "error",
+    "health",
+    "middleware",
+    "testing",
+] }
 
 # Web framework
-actix-web = "4"
+actix-web = { version = "4", default-features = false, features = [
+    "macros",
+    "compress-brotli",
+    "compress-gzip",
+    "compress-zstd",
+    "cookies",
+    "unicode",
+    "compat",
+    "ws",
+] }
 actix-rt = "2"
 actix-cors = "0.7"
 
@@ -60,8 +82,24 @@ hex = "0.4"
 # Encryption (AES-256-GCM)
 aes-gcm = "0.10"
 
+# Client SMTP, pour que /verify compose vraiment (TCP + EHLO + TLS/STARTTLS + AUTH).
+# Deux fonctionnalites sont ecartees a dessein :
+#   - `dkim` tirerait `rsa` 0.9, porteuse de RUSTSEC-2023-0071 sans correctif amont ;
+#   - `native-tls` tirerait OpenSSL, alors que rustls 0.23 + ring sont deja dans le
+#     graphe livre (via sqlx). Gardes : tests/framework.rs.
+lettre = { version = "0.11", default-features = false, features = [
+    "smtp-transport",
+    "tokio1",
+    "tokio1-rustls-tls",
+    "hostname",
+    "tracing",
+] }
+
 [dev-dependencies]
 actix-rt = "2"
+# Le faux serveur SMTP des tests decode le paquet AUTH PLAIN pour prouver que les
+# identifiants dechiffres voyagent vraiment (arete de developpement uniquement).
+base64 = "0.22"
 actix-http = "3"
 reqwest = { version = "0.12", features = ["json"] }
 dotenvy = "0.15"
